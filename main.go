@@ -16,6 +16,15 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+type exitStatusMsg struct {
+	Status uint32
+}
+
+// RFC 4254 Section 6.5.
+type execMsg struct {
+	Command string
+}
+
 var (
 	password       = flag.String("pass", "", "SSH password")
 	username       = flag.String("user", "root", "SSH username, default is root")
@@ -69,6 +78,17 @@ func handleConnection(nConn net.Conn, config *ssh.ServerConfig) {
 	}
 }
 
+func runExecCommand(command string, ch ssh.Channel) {
+	cmd := exec.Command("/bin/bash", "-c", command)
+	cmd.Stdout = ch
+	cmd.Stderr = ch.Stderr()
+	cmd.Stdin = ch
+	cmd.Run()
+	fmt.Println("exec command: ", command)
+	ch.SendRequest("exit-status", false, []byte{0, 0, 0, 0})
+	ch.Close()
+}
+
 func handleRequests(channel ssh.Channel, requests <-chan *ssh.Request) {
 	defer channel.Close()
 
@@ -115,27 +135,34 @@ func handleRequests(channel ssh.Channel, requests <-chan *ssh.Request) {
 			return
 		}
 
-		// Send initial setup commands
-		go func() {
-			stdin.Write([]byte("export TERM=xterm-256color\n"))
-			stdin.Write([]byte("cd \"$HOME\"\n"))
-			stdin.Write([]byte("clear\n"))
-		}()
-
 		// Handle SSH requests with proper terminal settings
+		isInteractive := false
 		go func() {
 			for req := range requests {
+				fmt.Printf("Request type %s\n", req.Type)
 				switch req.Type {
 				case "shell":
+					isInteractive = true
+					if isInteractive {
+						stdin.Write([]byte("export TERM=xterm-256color\n"))
+						stdin.Write([]byte("cd \"$HOME\"\n"))
+						stdin.Write([]byte("clear\n"))
+					}
 					req.Reply(true, nil)
 				case "pty-req":
+					isInteractive = true
 					termLen := req.Payload[3]
 					w, h := parseDims(req.Payload[termLen+4:])
 					log.Printf("Terminal size: %dx%d", w, h)
 					req.Reply(true, nil)
+				case "subsystem", "exec":
+					channel.Write([]byte("Request of type subsystem or exec are not suppprted\n"))
+					req.Reply(false, nil)
 				case "window-change":
-					w, h := parseDims(req.Payload)
-					log.Printf("Window size changed: %dx%d", w, h)
+					if isInteractive {
+						w, h := parseDims(req.Payload)
+						log.Printf("Window size changed: %dx%d", w, h)
+					}
 				}
 			}
 		}()
@@ -194,21 +221,18 @@ func handleRequests(channel ssh.Channel, requests <-chan *ssh.Request) {
 		cmd.Wait()
 	} else {
 		// Unix/Linux code
-		cmd := getShellCommand()
-		f, err = pty.Start(cmd)
-		if err != nil {
-			log.Printf("Failed to start shell: %v", err)
-			return
-		}
-		defer f.Close()
+		isInteractive := false
 
 		// Handle requests
 		go func() {
 			for req := range requests {
+				fmt.Printf("Request type: %s\n", req.Type)
 				switch req.Type {
 				case "shell":
+					isInteractive = true
 					req.Reply(true, nil)
 				case "pty-req":
+					isInteractive = true
 					termLen := req.Payload[3]
 					w, h := parseDims(req.Payload[termLen+4:])
 					term := string(req.Payload[4 : termLen+4])
@@ -218,22 +242,59 @@ func handleRequests(channel ssh.Channel, requests <-chan *ssh.Request) {
 						Cols: uint16(w),
 					})
 					req.Reply(true, nil)
+				case "subsystem":
+					channel.Write([]byte("Request of type subsystem is not suppprted\n"))
+					req.Reply(false, nil)
+				case "exec":
+					var msg execMsg
+					if err := ssh.Unmarshal(req.Payload, &msg); err != nil {
+						log.Printf("error parsing ssh execMsg: %s\n", err)
+						req.Reply(false, nil)
+						return
+					}
+					fmt.Printf("Subsystem request: %s", msg.Command)
+					go func(msg execMsg, ch ssh.Channel) {
+						// ch can be used as a ReadWriteCloser if there should be interactivity
+						runExecCommand(msg.Command, ch)
+						ex := exitStatusMsg{
+							Status: 0,
+						}
+						// return the status code
+						if _, err := ch.SendRequest("exit-status", false, ssh.Marshal(&ex)); err != nil {
+							log.Printf("unable to send status: %v", err)
+						}
+						ch.Close()
+					}(msg, channel)
+					req.Reply(true, nil) // tell the other end that we can run the request
 				case "window-change":
-					w, h := parseDims(req.Payload)
-					pty.Setsize(f, &pty.Winsize{
-						Rows: uint16(h),
-						Cols: uint16(w),
-					})
+					if isInteractive {
+						w, h := parseDims(req.Payload)
+						pty.Setsize(f, &pty.Winsize{
+							Rows: uint16(h),
+							Cols: uint16(w),
+						})
+					}
 				}
 			}
 		}()
 
-		// Setup bidirectional communication
-		go func() {
-			io.Copy(f, channel)
-			f.Close() // This will signal the process to terminate
-		}()
-		io.Copy(channel, f)
+		if isInteractive {
+			// Interactive session - use PTY
+			cmd := getShellCommand()
+			f, err = pty.Start(cmd)
+			if err != nil {
+				log.Printf("Failed to start shell: %v", err)
+				return
+			}
+			defer f.Close()
+
+			// Setup bidirectional communication
+			go func() {
+				io.Copy(f, channel)
+				f.Close() // This will signal the process to terminate
+			}()
+			io.Copy(channel, f)
+		}
 	}
 }
 
