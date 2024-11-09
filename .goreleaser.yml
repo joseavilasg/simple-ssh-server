@@ -1,0 +1,49 @@
+version: 2
+project_name: sshsrv
+env:
+  - GO111MODULE=on
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+
+    main: main.go
+    binary: sshsrv
+    flags: -trimpath
+    ldflags:
+     - -extldflags=-static
+     - -s -w
+     - -X {{ .ModulePath }}/internal/config.Version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm
+      - arm64
+
+checksum:
+  name_template: "{{ .ProjectName }}_checksums.txt"
+
+archives:
+  - name_template: "{{ .ProjectName }}-{{ .Tag }}-{{ .Os }}-{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README*.md
+      - LICENSE
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^README'
+      - '^Update'
+      - Merge pull request
+      - Merge branch
