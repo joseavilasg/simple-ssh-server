@@ -1,0 +1,51 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Go workspace file
+go.work
+
+
+# Go build artifacts
+bin/
+build/
+*.log
+
+# IDE and editor specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+
+# Dependency directories (remove the comment below if you use vendoring)
+# vendor/
+
+# Go test binaries
+*.test
+
+# Go coverage files
+*.cover
+
+# Go race detector output
+*.race
+
+# Go benchmark files
+*.bench
+
+# Go profiling files
+*.prof
+
+# Go debug files
+*.trace
+*.pprof
+
+# Go cache
+go-build/
