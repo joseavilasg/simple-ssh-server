@@ -1,11 +1,10 @@
 module ssh
 
-go 1.22.0
-toolchain go1.23.6
+go 1.25.0
 
 require (
 	github.com/creack/pty v1.1.24
-	golang.org/x/crypto v0.35.0
+	golang.org/x/crypto v0.52.0
 )
 
-require golang.org/x/sys v0.30.0 // indirect
+require golang.org/x/sys v0.45.0 // indirect
